@@ -1,0 +1,45 @@
+import org.ipt.common.AgentProvider
+
+// node
+def agentProvider = new AgentProvider()
+def agentParams = [:]
+agentParams["image"] = "cw-jdk8-docker-test"
+agentParams["label"] = agentParams["image"] + UUID.randomUUID().toString()
+agentProvider.getJenkinsNode(agentParams){
+    def branch = params.BRANCH
+    def timeStamp = new Date().format("yyyy-MM-dd-HH-mm", TimeZone.getTimeZone('UTC'))
+    def imageTag = "**********************/**/**/***/*****/************:${branch}-${timeStamp}"
+    
+    stage("Checkout from SCM"){
+        checkout scm
+    }
+    //docker + ecr login
+    stage("Docker build"){
+        def dockerUser = sh(
+          script: 'vault read -field=user secret/jenkins/dockerhub_login',
+          returnStdout: true).trim()
+
+        def dockerToken = sh(
+          script: 'vault read -field=token secret/jenkins/dockerhub_login',
+          returnStdout: true).trim()
+
+        sh(script: "set +x; docker login --username=${dockerUser} --password=${dockerToken}", returnStdout: false)
+        sh 'eval $(aws ecr get-login --no-include-email --region eu-west-1)'
+
+        sh "docker build -t ${imageTag} --pull ."
+
+        //sh "trivy image ${imageTag}"
+
+        sh "docker push ${imageTag}"
+
+    }
+
+    stage("Git Tag"){
+        sh "git tag ${branch}-${timeStamp}; git push --tags"        
+    } 
+
+    stage("Robby Deploy"){
+        sh "helm3 upgrade --install --namespace ******* --kube-context ********* -f helmDeploy/values.yaml -f helmDeploy/values-dev.yaml --set version=${branch}-${timeStamp} --wait robby-dev helmDeploy"
+
+    }
+}
